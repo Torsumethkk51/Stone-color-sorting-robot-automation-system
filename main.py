@@ -3,6 +3,11 @@ import numpy as np
 import math
 from enum import Enum
 
+class RockStatus(Enum):
+    WAITING = 1,
+    ON_ROBOT = 2,
+    DELIVERED = 3
+
 class RunMode(Enum):
     PRODUCTION = 1
     SIMULATION = 2
@@ -14,6 +19,23 @@ simulation_config = {
     "robot_turn_speed" : 5.0
 }
 
+class Rock:
+    def __init__(self, rock_id, x, y, color_name, bgr_color):
+        self.id = rock_id
+        self.x = float(x)
+        self.y = float(y)
+        self.color_name = color_name
+        self.bgr = bgr_color
+        self.status = RockStatus.WAITING
+
+    def draw(self, canvas):
+        # Draw only the rokcs that not on the robot
+        if self.status != RockStatus.ON_ROBOT:
+            cv2.circle(canvas, (int(self.x), int(self.y)), 8, self.bgr, -1)
+            # Draw border
+            cv2.circle(canvas, (int(self.x), int(self.y)), 8, (40, 40, 40), 1)
+        
+
 # Create a simulation robot class
 class Robot2D:
     def __init__(self, start_x, start_y, theta, width, length):
@@ -22,6 +44,7 @@ class Robot2D:
         self.theta = float(theta)
         self.width = width
         self.length = length
+        self.picked = None
 
     def get_corners(self):
         rad = math.radians(self.theta)
@@ -59,6 +82,32 @@ class Robot2D:
         fx = int(self.x + head_len * math.cos(rad))
         fy = int(self.y + head_len * math.sin(rad))
         cv2.arrowedLine(canvas, (int(self.x), int(self.y)), (fx, fy), (255, 0, 0), 2, tipLength=0.3)
+
+        # If robot is contain a stone just show it on the robot
+        if self.picked is not None:
+            cv2.circle(canvas, (int(self.x), int(self.y)), 8, self.picked.bgr, -1)
+            cv2.circle(canvas, (int(self.x), int(self.y)), 8, (255, 255, 255), 1)
+
+    def move_towards(self, target_x, target_y, speed=4.0, turn_speed=5.0, threshold=15.0):
+        dx = target_x - self.x
+        dy = target_y - self.y
+        dist = math.hypot(dx, dy)
+
+        if dist <= threshold:
+            return True
+
+        target_theta = math.degrees(math.atan2(dy, dx))
+        delta_theta = (target_theta - self.theta + 180.0) % 360.0 - 180.0
+
+        if abs(delta_theta) > turn_speed:
+            self.theta += math.copysign(turn_speed, delta_theta)
+        else:
+            self.theta = target_theta
+            rad = math.radians(self.theta)
+            self.x += speed * math.cos(rad)
+            self.y += speed * math.sin(rad)
+
+        return False
 
 def order_points(pts):
     rect = np.zeros((4, 2), dtype="float32")
@@ -105,16 +154,9 @@ def get_perspective_matrix(image):
 
     # Find field contour
     field_contour = None
-    # min_field_area = None
-    # h_img, w_img = image.shape[:2]
 
-    # # The contour area must more than 20% of original image
-    # min_field_area = (h_img * w_img) * 0.2
 
     for c in contours:
-        # if cv2.contourArea(c) < min_field_area:
-        #     continue
-
         # Find each contour's perimeter and make sure each conture in closed shape
         peri = cv2.arcLength(c, True)
 
@@ -172,10 +214,31 @@ def dynamic_warp_perspective(image):
 
     return warped;
 
-img = cv2.imread("data/field.png")
+field_img = cv2.imread("data/field.png")
+# If image is not found, draw a temporary field
+if field_img is None:
+    field_img = np.full((600, 800, 3), (220, 220, 220), dtype=np.uint8)
 
-if img is not None: 
-    rectangle_field = dynamic_warp_perspective(img)
+if field_img is not None: 
+    rectangle_field = dynamic_warp_perspective(field_img)
+
+    fh, fw = rectangle_field.shape[:2]
+
+    # Simulated drop zone of each color
+    drop_zones = {
+        "red":   {"pos": (80, 80),             "color": (0, 0, 255)},
+        "green": {"pos": (fw - 80, 80),        "color": (0, 220, 0)},
+        "blue":  {"pos": (fw - 80, fh - 80),   "color": (255, 120, 0)}
+    }
+
+    # Simulated stones positions
+    rocks = [
+        Rock(1, fw // 2 - 20, fh // 2 - 15, "red",   (0, 0, 255)),
+        Rock(2, fw // 2 + 15, fh // 2 + 10, "blue",  (255, 120, 0)),
+        Rock(3, fw // 2 - 10, fh // 2 + 25, "green", (0, 220, 0)),
+        Rock(4, fw // 2 + 25, fh // 2 - 20, "red",   (0, 0, 255)),
+        Rock(5, fw // 2,      fh // 2 + 5,  "blue",  (255, 120, 0)),
+    ]
 
     if mode == RunMode.SIMULATION:
         # If field not founded, create a gray field 600 x 800 px instead
@@ -189,9 +252,60 @@ if img is not None:
         speed = simulation_config["robot_speed"]
         turn_speed = simulation_config["robot_turn_speed"]
 
+        # Initialize machine state
+        state = "SEARCH"
+        target_rock = None
+        placed_count = {"red": 0, "green": 0, "blue": 0}
+
         # Simulation loop
         while True:
             canvas = rectangle_field.copy()
+
+            # Draw all drop zones
+            for name, data in drop_zones.items():
+                pos = data["pos"]
+                cv2.circle(canvas, pos, 35, data["color"], 2)
+                cv2.putText(canvas, f"ZONE: {name.upper()}", (pos[0] - 35, pos[1] - 42), cv2.FONT_HERSHEY_SIMPLEX, 0.45, data["color"], 1)
+
+            if state == "SEARCH":
+                # Find for available rocks
+                waiting_rocks = [r for r in rocks if r.status == RockStatus.WAITING]
+                if waiting_rocks:
+                    # Find the nearest rock use euclidian distance
+                    target_rock = min(waiting_rocks, key=lambda r: math.hypot(r.x - robot.x, r.y - robot.y))
+                    state = "GO_TO_ROCK"
+                else:
+                    cv2.putText(canvas, "ALL ROCKS DELIVERED!", (fw // 2 - 130, 45),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 200, 0), 2)
+
+            elif state == "GO_TO_ROCK":
+                reached = robot.move_towards(target_rock.x, target_rock.y)
+                if reached:
+                    # Collect stone
+                    target_rock.status = RockStatus.ON_ROBOT
+                    robot.picked = target_rock
+                    state = "DELIVER"
+
+            elif state == "DELIVER":
+                # Go to target zone (same color with the stone on the robot)
+                zone = drop_zones[robot.picked.color_name]
+                zx, zy = zone["pos"]
+                reached = robot.move_towards(zx, zy)
+                if reached:
+                    # Place stone down, place it in distributive position
+                    count = placed_count[robot.picked.color_name]
+                    robot.picked.x = zx + ((count % 3) - 1) * 15
+                    robot.picked.y = zy + ((count // 3) - 1) * 15
+                    robot.picked.status = RockStatus.DELIVERED
+                    placed_count[robot.picked.color_name] += 1
+                    
+                    robot.picked = None
+                    # Back to search next stone
+                    state = "SEARCH" 
+
+            # Draw every stone
+            for r in rocks:
+                r.draw(canvas)
 
             robot.draw(canvas)
 
