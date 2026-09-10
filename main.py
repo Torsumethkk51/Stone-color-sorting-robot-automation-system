@@ -1,5 +1,64 @@
 import cv2
 import numpy as np
+import math
+from enum import Enum
+
+class RunMode(Enum):
+    PRODUCTION = 1
+    SIMULATION = 2
+
+mode = RunMode.SIMULATION
+
+simulation_config = {
+    "robot_speed" : 5.0,
+    "robot_turn_speed" : 5.0
+}
+
+# Create a simulation robot class
+class Robot2D:
+    def __init__(self, start_x, start_y, theta, width, length):
+        self.x = float(start_x)
+        self.y = float(start_y)
+        self.theta = float(theta)
+        self.width = width
+        self.length = length
+
+    def get_corners(self):
+        rad = math.radians(self.theta)
+        cos_a = math.cos(rad)
+        sin_a = math.sin(rad)
+
+        w2 = self.width / 2
+        l2 = self.length / 2
+
+        # Define 4 corners of robot with 0 deg rotating (east)
+        # front right, front back, left back, front left
+        offsets = [(l2, -w2), (-l2, -w2), (-l2, w2), (l2, w2)]
+
+        # Calculate 4 corners after rotating theta radian
+        corners = []
+        for dx, dy in offsets:
+            px = self.x + (dx * cos_a - dy * sin_a)
+            py = self.y + (dx * sin_a + dy * cos_a)
+            corners.append([px, py])
+
+        return np.array(corners, dtype=np.int32)
+
+    def draw(self, canvas):
+        corners = self.get_corners()
+
+        # Draw robot body (color : red)
+        cv2.fillPoly(canvas, [corners], (255, 0, 0))
+
+        # Draw robot border (color : white)
+        cv2.polylines(canvas, [corners], isClosed=True, color=(255, 255, 255), thickness=2)
+
+        # Draw an arrow on the robot's body
+        rad = math.radians(self.theta)
+        head_len = self.length * 0.75
+        fx = int(self.x + head_len * math.cos(rad))
+        fy = int(self.y + head_len * math.sin(rad))
+        cv2.arrowedLine(canvas, (int(self.x), int(self.y)), (fx, fy), (255, 0, 0), 2, tipLength=0.3)
 
 def order_points(pts):
     rect = np.zeros((4, 2), dtype="float32")
@@ -113,20 +172,59 @@ def dynamic_warp_perspective(image):
 
     return warped;
 
-img_set = ["data/field.png", "data/test1.jpg"]
+img = cv2.imread("data/field.png")
 
-for i in range(len(img_set)):
-    img = cv2.imread(img_set[i])
+if img is not None: 
+    rectangle_field = dynamic_warp_perspective(img)
 
-    if img is not None: 
-        rectangle_field = dynamic_warp_perspective(img)
+    if mode == RunMode.SIMULATION:
+        # If field not founded, create a gray field 600 x 800 px instead
+        if rectangle_field is None:
+            rectangle_field = np.full((600, 800), (220, 220, 220), 3, np.unit8)
 
-        cv2.imshow(f"Original image {i + 1}", img)
-        cv2.imshow(f"Dynamic rectangle field {i + 1}", rectangle_field)
+        # Simulation robot setup
+        h, w = rectangle_field.shape[:2]
+        robot = Robot2D(start_x=w // 2, start_y=h // 2, theta=0, width=20, length=50)
 
-    else:
-        print("Can't find the image")
+        speed = simulation_config["robot_speed"]
+        turn_speed = simulation_config["robot_turn_speed"]
+
+        # Simulation loop
+        while True:
+            canvas = rectangle_field.copy()
+
+            robot.draw(canvas)
+
+            cv2.imshow("Robot simulation", canvas)
+
+            key = cv2.waitKey(30) & 0xFF
+            # Exit simulation
+            if key == ord('q') or key == 27:
+                break
+            # Turn left
+            elif key == ord('a'):
+                robot.theta -= turn_speed
+            # Turn right
+            elif key == ord('d'):
+                robot.theta += turn_speed
+            # Move forward according to robot direction
+            elif key == ord('w'):
+                rad = math.radians(robot.theta)
+                robot.x += speed * math.cos(rad)
+                robot.y += speed * math.sin(rad)
+            # Move backward
+            elif key == ord('s'):  # ถอยหลัง
+                rad = math.radians(robot.theta)
+                robot.x -= speed * math.cos(rad)
+                robot.y -= speed * math.sin(rad)
+    
+        cv2.destroyAllWindows()
+
         
+
+else:
+    print("Can't find the image")
+    
 cv2.waitKey(0);
 cv2.destroyAllWindows()
 
