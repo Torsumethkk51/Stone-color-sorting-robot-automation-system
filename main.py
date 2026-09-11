@@ -342,33 +342,41 @@ else:
 cv2.waitKey(0);
 cv2.destroyAllWindows()
 
-# # Use camera
-# cap = cv2.VideoCapture(0)
+# http://10.218.237.102:8080/video
 
-# matrix = None
-# target_size = None
+# url = "http://10.44.167.79:8080/video"
+# cap = cv2.VideoCapture(url)
+# aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_1000)
+# detector = cv2.aruco.ArucoDetector(aruco_dict, cv2.aruco.DetectorParameters())
 
 # while cap.isOpened():
 #     ret, frame = cap.read()
-
-#     # If can't read frame from camera
 #     if not ret:
-#         break;
+#         break
 
-#     # Find matrix just once for first frame
-#     if matrix is None:
-#         (max_width, max_height, matrix) = get_perspective_matrix(frame)
-#         target_size = (max_width, max_height)
+#     corners, ids, _ = detector.detectMarkers(frame)
+#     if ids is not None and 0 in ids:
+#         idx = list(ids.flatten()).index(0)
+#         pts = corners[idx][0]
+        
+#         # Find center of marker
+#         cx = int(pts[:, 0].mean())
+#         cy = int(pts[:, 1].mean())
+        
+#         # Find the center of car front and car side (x, y)
+#         fx = int((pts[0][0] + pts[1][0]) / 2)
+#         fy = int((pts[0][1] + pts[1][1]) / 2)
+#         theta = math.degrees(math.atan2(fy - cy, fx - cx))
 
-#     # Get an image every frame
-#     if matrix is not None:
-#         warped_frame = cv2.warpPerspective(frame, matrix, target_size)
-#         cv2.imshow("Realtime robot vision", warped_frame)
+#         # Display it on screen
+#         cv2.circle(frame, (cx, cy), 6, (0, 255, 0), -1)
+#         cv2.line(frame, (cx, cy), (fx, fy), (0, 0, 255), 2)
+#         cv2.putText(frame, f"Theta: {theta:.1f} deg", (cx + 10, cy), 
+#                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
 
-#     # End program when pressed q
-#     if cv2.waitKey(1) & 0xFF == ord('0'):
-#         break 
+#     cv2.imshow("ArUco Test", frame)
+#     if cv2.waitKey(1) & 0xFF == ord('q'):
+#         break
 
-# # Completely close a program
 # cap.release()
 # cv2.destroyAllWindows()
